@@ -1,14 +1,13 @@
 {
-  "name": "spark",
-  "version": "1.0.0",
+  "name": "spark-realtime",
+  "version": "1.2.0",
   "type": "module",
   "scripts": {
-    "start": "node spark.js",
-    "dev": "node --watch spark.js",
-    "vercel-build": "echo 'Building...'"
+    "start": "node server.js",
+    "dev": "node --watch server.js"
   },
   "dependencies": {
-    "axios": "^1.6.0",
-    "dotenv": "^3.0.0"
+    "express": "^4.19.0",
+    "dotenv": "^16.4.0"
   }
 }
