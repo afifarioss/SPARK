@@ -1,11 +1,15 @@
 {
   "version": 2,
-  "functions": {
-    "api/spark.js": {
-      "maxDuration": 10
+  "builds": [
+    {
+      "src": "server.js",
+      "use": "@vercel/node"
     }
-  },
-  "env": {
-    "NEYNAR_API_KEY": "@neynar_api_key"
-  }
+  ],
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "server.js"
+    }
+  ]
 }
