@@ -1,41 +1,181 @@
 import axios from 'axios';
 
-const API_KEY = process.env.NEYNAR_API_KEY || 'NEYNAR_API_DEMO';
-const NEYNAR_URL = 'https://api.neynar.com/v2/farcaster';
+// ============================================
+// CONFIG - No fallback key. Must set in Vercel.
+// ============================================
+const API_KEY = process.env.NEYNAR_API_KEY;
+if (!API_KEY) {
+  throw new Error('NEYNAR_API_KEY is required. Add it in Vercel Environment Variables.');
+}
 
+const NEYNAR_URL = 'https://api.neynar.com/v2';
+
+// Simple in-memory cache (resets on cold start, good enough for MVP)
+const cache = new Map();
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+function getCache(key) {
+  const item = cache.get(key);
+  if (!item) return null;
+  if (Date.now() > item.expiry) {
+    cache.delete(key);
+    return null;
+  }
+  return item.data;
+}
+
+function setCache(key, data) {
+  cache.set(key, { data, expiry: Date.now() + CACHE_TTL });
+}
+
+// ============================================
+// API HANDLER
+// ============================================
 export default async function handler(req, res) {
-  // Enable CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+
   try {
-    const result = await runSpark();
+    const spark = new Spark();
+    const result = await spark.ignite();
+    
     res.status(200).json({
       success: true,
       data: result,
       timestamp: new Date().toISOString()
     });
   } catch (error) {
+    console.error('SPARK ERROR:', error.message);
     res.status(500).json({
       success: false,
-      error: error.message
+      error: error.message,
+      hint: 'Check NEYNAR_API_KEY in Vercel dashboard'
     });
   }
 }
 
-async function runSpark() {
-  const spark = new Spark();
-  return await spark.ignite();
-}
-
 // ============================================
-// 🔥 SPARK CORE - Intelligence Engine
+// 🔥 SPARK CORE - Fixed & Optimized
 // ============================================
 
 class Spark {
   constructor() {
-    this.channels = ['/base', '/degen', '/clanker', '/crypto', '/nft'];
+    this.channels = ['base', 'degen', 'clanker', 'crypto', 'nft'];
     this.igniteThreshold = 50;
-    this.version = '1.0.0';
+    this.version = '1.1.0';
+  }
+
+  async ignite() {
+    const allSparks = [];
+    let totalSparks = 0;
+
+    for (const channel of this.channels) {
+      try {
+        const result = await this.scanChannel(channel);
+        totalSparks += result.count;
+        if (result.sparks.length > 0) {
+          allSparks.push({
+            channel: `/${channel}`,
+            sparks: result.sparks,
+            count: result.count
+          });
+        }
+        // Small delay to avoid Neynar rate limits
+        await new Promise(r => setTimeout(r, 200));
+      } catch (err) {
+        console.error(`Channel ${channel} failed:`, err.message);
+      }
+    }
+
+    return {
+      summary: {
+        channelsScanned: this.channels.length,
+        channelsIgnited: allSparks.length,
+        totalSparks: totalSparks,
+        version: this.version
+      },
+      sparks: allSparks,
+      timestamp: new Date().toISOString(),
+      message: '💎 "Don\'t just consume alpha. SPARK it."'
+    };
+  }
+
+  async scanChannel(channel) {
+    const cacheKey = `channel_${channel}`;
+    const cached = getCache(cacheKey);
+    if (cached) return cached;
+
+    const casts = await this.getChannelCasts(channel, 50);
+    const sparks = [];
+
+    for (const cast of casts) {
+      try {
+        // Batch reputation calls with cache
+        const reputation = await this.getCachedReputation(cast.author.fid);
+        const alphaScore = this.calcAlphaScore(cast.text, channel);
+        const sentiment = this.analyzeSentiment(cast.text);
+        const mentions = this.extractMentions(cast.text);
+        const frameData = this.detectFrames(cast);
+        const engagementBoost = this.calcEngagementBoost(cast);
+
+        // FIXED: Sentiment absolute value (controversy = attention)
+        // Rug warnings and hype both score high
+        const totalScore = (alphaScore * 0.40) + 
+                          (reputation.score * 0.30) + 
+                          (Math.abs(sentiment) * 2.5) +  // -10 to 10 → 0 to 25
+                          (engagementBoost * 0.15);
+
+        if (totalScore > this.igniteThreshold) {
+          sparks.push({
+            author: cast.author.username || 'unknown',
+            fid: cast.author.fid,
+            reputation: reputation,
+            text: (cast.text || '').substring(0, 200),
+            alphaScore: Math.round(alphaScore),
+            totalScore: Math.round(totalScore),
+            sentiment: this.getSentimentLabel(sentiment),
+            mentions: mentions,
+            hasFrame: frameData.hasFrame,
+            frameAction: frameData.action,
+            channel: `/${channel}`,
+            timestamp: cast.timestamp,
+            sparkId: this.generateSparkId()
+          });
+        }
+      } catch (err) {
+        // Skip bad casts, keep scanning
+        continue;
+      }
+    }
+
+    sparks.sort((a, b) => b.totalScore - a.totalScore);
+    
+    const result = {
+      channel: `/${channel}`,
+      sparks: sparks.slice(0, 5),
+      count: sparks.length
+    };
+
+    setCache(cacheKey, result);
+    return result;
+  }
+
+  // ============================================
+  // REPUTATION ENGINE (with cache)
+  // ============================================
+  
+  async getCachedReputation(fid) {
+    const cacheKey = `rep_${fid}`;
+    const cached = getCache(cacheKey);
+    if (cached) return cached;
+    
+    const rep = await this.calculateFIDReputation(fid);
+    setCache(cacheKey, rep);
+    return rep;
   }
 
   async calculateFIDReputation(fid) {
@@ -52,13 +192,14 @@ class Spark {
       const contentQuality = this.analyzeContentQuality(casts);
       const channelDiversity = this.calcChannelDiversity(casts);
 
-      score = (engagementRate * 0.3) + 
+      score = (engagementRate * 0.30) + 
               (networkDensity * 0.25) + 
               (contentQuality * 0.25) + 
-              (channelDiversity * 0.2);
+              (channelDiversity * 0.20);
 
-      if (this.isChannelExpert(casts, '/base')) score *= 1.2;
-      if (this.isChannelExpert(casts, '/degen')) score *= 1.15;
+      // Channel expert multipliers
+      if (this.isChannelExpert(casts, 'base')) score *= 1.15;
+      if (this.isChannelExpert(casts, 'degen')) score *= 1.10;
 
       return {
         fid,
@@ -74,105 +215,90 @@ class Spark {
     }
   }
 
-  async scanChannel(channel) {
+  // ============================================
+  // NEYNAR API CALLS (Fixed endpoints)
+  // ============================================
+
+  async neynarGet(endpoint, params = {}) {
+    const res = await axios.get(`${NEYNAR_URL}${endpoint}`, {
+      params,
+      headers: { 'x-api-key': API_KEY },
+      timeout: 10000
+    });
+    return res.data;
+  }
+
+  async getFollowers(fid) {
     try {
-      const casts = await this.getChannelCasts(channel, 50);
-      const sparks = [];
-
-      for (const cast of casts) {
-        const reputation = await this.calculateFIDReputation(cast.author.fid);
-        const alphaScore = this.calcAlphaScore(cast.text, channel);
-        const sentiment = this.analyzeSentiment(cast.text);
-        const mentions = this.extractMentions(cast.text);
-        const frameData = this.detectFrames(cast);
-
-        const totalScore = (alphaScore * 0.4) + 
-                          (reputation.score * 0.3) + 
-                          (sentiment * 0.15) + 
-                          (this.calcEngagementBoost(cast) * 0.15);
-
-        if (totalScore > this.igniteThreshold) {
-          sparks.push({
-            author: cast.author.username,
-            fid: cast.author.fid,
-            reputation: reputation,
-            text: cast.text.substring(0, 200),
-            alphaScore: Math.round(alphaScore),
-            totalScore: Math.round(totalScore),
-            sentiment: this.getSentimentLabel(sentiment),
-            mentions: mentions,
-            hasFrame: frameData.hasFrame,
-            frameAction: frameData.action,
-            channel: channel,
-            timestamp: cast.timestamp,
-            sparkId: this.generateSparkId()
-          });
-        }
-      }
-
-      sparks.sort((a, b) => b.totalScore - a.totalScore);
-      
-      return {
-        channel,
-        sparks: sparks.slice(0, 5),
-        count: sparks.length
-      };
-
-    } catch (error) {
-      return { channel, sparks: [], count: 0 };
+      const data = await this.neynarGet('/farcaster/followers', { fid, limit: 100 });
+      return data.users || [];
+    } catch (e) {
+      return [];
     }
   }
 
-  detectFrames(cast) {
-    const hasFrame = cast.frames && cast.frames.length > 0;
-    let action = null;
-    if (hasFrame) {
-      const text = cast.text.toLowerCase();
-      if (text.includes('mint') || text.includes('claim')) action = 'mint';
-      else if (text.includes('buy') || text.includes('trade')) action = 'trade';
-      else if (text.includes('vote')) action = 'vote';
-      else action = 'interact';
+  async getFollowing(fid) {
+    try {
+      const data = await this.neynarGet('/farcaster/following', { fid, limit: 100 });
+      return data.users || [];
+    } catch (e) {
+      return [];
     }
-    return { hasFrame, action };
   }
 
-  generateFrameURL(spark) {
-    if (!spark.hasFrame) return null;
-    return `https://frames.spark.xyz/${spark.frameAction}?cast=${spark.cast?.hash}`;
+  async getUserCasts(fid) {
+    try {
+      const data = await this.neynarGet('/farcaster/casts', { fid, limit: 50 });
+      return data.casts || [];
+    } catch (e) {
+      return [];
+    }
   }
 
-  async checkAccess(userFid) {
-    return {
-      hasAccess: true,
-      tier: 'free',
-      credits: 10,
-      paymentUrl: `https://pay.spark.xyz/x402?fid=${userFid}`,
-      sparkCredits: '⚡ 10 free sparks remaining'
-    };
+  async getChannelCasts(channel, limit = 50) {
+    try {
+      // FIXED: Correct Neynar v2 feed params
+      const data = await this.neynarGet('/farcaster/feed', {
+        feed_type: 'filter',
+        filter_type: 'channel_id',
+        channel_id: channel,
+        limit: limit
+      });
+      return data.casts || [];
+    } catch (e) {
+      return [];
+    }
   }
+
+  // ============================================
+  // SCORING ALGORITHMS
+  // ============================================
 
   calcAlphaScore(text, channel) {
     const channelKeywords = {
-      '/base': ['base', 'nft', 'mint', 'collection', 'art', 'creator', 'frame', 'build'],
-      '/degen': ['token', 'meme', 'airdrop', 'farm', 'liquidity', 'trade', 'yield'],
-      '/clanker': ['clanker', 'agent', 'ai', 'autonomous', 'bot', 'automation', 'spark'],
-      '/crypto': ['bitcoin', 'eth', 'layer2', 'defi', 'protocol', 'governance'],
-      '/nft': ['art', 'collectible', 'rarity', 'mint', 'whitelist', 'reveal']
+      'base': ['base', 'nft', 'mint', 'collection', 'art', 'creator', 'frame', 'build', 'onchain'],
+      'degen': ['token', 'meme', 'airdrop', 'farm', 'liquidity', 'trade', 'yield', 'pump'],
+      'clanker': ['clanker', 'agent', 'ai', 'autonomous', 'bot', 'automation', 'spark', 'virtuals'],
+      'crypto': ['bitcoin', 'eth', 'layer2', 'defi', 'protocol', 'governance', 'btc'],
+      'nft': ['art', 'collectible', 'rarity', 'mint', 'whitelist', 'reveal', 'drop']
     };
 
     const keywords = channelKeywords[channel] || [];
     let score = 0;
-    const textLower = text.toLowerCase();
+    const textLower = (text || '').toLowerCase();
 
-    const alphaIndicators = ['🚀', '💎', 'alpha', 'early', 'undervalued', 'gem', 'next', '🔥', '⚡'];
+    // Alpha indicators (emojis & keywords)
+    const alphaIndicators = ['🚀', '💎', 'alpha', 'early', 'undervalued', 'gem', 'next', '🔥', '⚡', '👀', '💰'];
     alphaIndicators.forEach(word => {
       if (textLower.includes(word)) score += 5;
     });
 
+    // Channel keywords
     keywords.forEach(word => {
       if (textLower.includes(word)) score += 3;
     });
 
+    // Token tickers
     const priceMatches = text.match(/\$[A-Z]{2,5}/g);
     if (priceMatches) score += priceMatches.length * 4;
 
@@ -180,12 +306,18 @@ class Spark {
   }
 
   analyzeSentiment(text) {
-    const positive = ['🚀', '💎', 'bull', 'buy', 'moon', 'gain', 'profit', 'alpha', '🔥', '⚡'];
-    const negative = ['💀', 'bear', 'sell', 'dump', 'scam', 'rug', 'waste', 'lose'];
+    const positive = ['🚀', '💎', 'bull', 'buy', 'moon', 'gain', 'profit', 'alpha', '🔥', '⚡', '👀'];
+    const negative = ['💀', 'bear', 'sell', 'dump', 'scam', 'rug', 'waste', 'lose', '🚨', '❌'];
     let score = 0;
-    const textLower = text.toLowerCase();
-    positive.forEach(word => { if (textLower.includes(word)) score += 2; });
-    negative.forEach(word => { if (textLower.includes(word)) score -= 2; });
+    const textLower = (text || '').toLowerCase();
+    
+    positive.forEach(word => { 
+      if (textLower.includes(word)) score += 2; 
+    });
+    negative.forEach(word => { 
+      if (textLower.includes(word)) score -= 2; 
+    });
+    
     return Math.max(-10, Math.min(10, score));
   }
 
@@ -194,51 +326,7 @@ class Spark {
     if (score > 0) return 'Warm 📈';
     if (score === 0) return 'Neutral ⚪';
     if (score > -3) return 'Caution ⚠️';
-    return 'Cool 🔴';
-  }
-
-  generateSparkId() {
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-    let id = 'SPARK-';
-    for (let i = 0; i < 6; i++) id += chars.charAt(Math.floor(Math.random() * chars.length));
-    return id;
-  }
-
-  async getFollowers(fid) {
-    const res = await axios.get(`${NEYNAR_URL}/follower`, {
-      params: { fid },
-      headers: { 'x-api-key': API_KEY }
-    });
-    return res.data.users || [];
-  }
-
-  async getFollowing(fid) {
-    const res = await axios.get(`${NEYNAR_URL}/following`, {
-      params: { fid },
-      headers: { 'x-api-key': API_KEY }
-    });
-    return res.data.users || [];
-  }
-
-  async getUserCasts(fid) {
-    const res = await axios.get(`${NEYNAR_URL}/casts`, {
-      params: { fid, limit: 50 },
-      headers: { 'x-api-key': API_KEY }
-    });
-    return res.data.casts || [];
-  }
-
-  async getChannelCasts(channel, limit = 50) {
-    const res = await axios.get(`${NEYNAR_URL}/feed`, {
-      params: {
-        feed_type: 'filter',
-        filter_type: 'channel',
-        channel_id: channel.replace('/', ''),
-        limit: limit
-      },
-      headers: { 'x-api-key': API_KEY }
-    });
-    return res.data.casts || [];
+    return 'Alert 🔴';
   }
 
   calcEngagementRate(casts) {
@@ -284,7 +372,7 @@ class Spark {
     if (!casts || casts.length === 0) return false;
     let count = 0;
     casts.forEach(cast => {
-      if (cast.channel?.id === channel.replace('/', '')) count++;
+      if (cast.channel?.id === channel) count++;
     });
     return count / casts.length > 0.3;
   }
@@ -293,14 +381,15 @@ class Spark {
     const engagement = (cast.reactions?.count || 0) + 
                       (cast.replies?.count || 0) * 2 +
                       (cast.recasts?.count || 0) * 1.5;
-    return Math.min(engagement / 100, 1) * 100;
+    // FIXED: Normalized 0-1, then scaled to 0-100
+    return Math.min(engagement / 50, 1) * 100;
   }
 
   extractMentions(text) {
     const mentions = [];
-    const tokens = text.match(/\$[A-Z]{2,5}/g);
+    const tokens = (text || '').match(/\$[A-Z]{2,5}/g);
     if (tokens) mentions.push(...tokens);
-    const users = text.match(/@[a-zA-Z0-9_]+/g);
+    const users = (text || '').match(/@[a-zA-Z0-9_]+/g);
     if (users) mentions.push(...users);
     return mentions;
   }
@@ -313,31 +402,41 @@ class Spark {
     return 'Newcomer 🌱';
   }
 
-  async ignite() {
-    const allSparks = [];
-    let totalSparks = 0;
-
-    for (const channel of this.channels) {
-      const result = await this.scanChannel(channel);
-      totalSparks += result.count;
-      if (result.sparks.length > 0) {
-        allSparks.push({
-          channel: channel,
-          sparks: result.sparks,
-          count: result.count
-        });
-      }
+  detectFrames(cast) {
+    const hasFrame = cast.frames && cast.frames.length > 0;
+    let action = null;
+    if (hasFrame) {
+      const text = (cast.text || '').toLowerCase();
+      if (text.includes('mint') || text.includes('claim')) action = 'mint';
+      else if (text.includes('buy') || text.includes('trade') || text.includes('swap')) action = 'trade';
+      else if (text.includes('vote') || text.includes('poll')) action = 'vote';
+      else action = 'interact';
     }
+    return { hasFrame, action };
+  }
 
+  generateFrameURL(spark) {
+    if (!spark.hasFrame || !spark.frameAction) return null;
+    // FIXED: Use fid and sparkId instead of undefined cast.hash
+    return `https://frames.spark.xyz/${spark.frameAction}?fid=${spark.fid}&id=${spark.sparkId}`;
+  }
+
+  generateSparkId() {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    let id = 'SPARK-';
+    for (let i = 0; i < 6; i++) {
+      id += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return id;
+  }
+
+  async checkAccess(userFid) {
     return {
-      summary: {
-        channelsIgnited: this.channels.length,
-        totalSparks: totalSparks,
-        version: this.version
-      },
-      sparks: allSparks,
-      timestamp: new Date().toISOString(),
-      message: '💎 "Don\'t just consume alpha. SPARK it."'
+      hasAccess: true,
+      tier: 'free',
+      credits: 10,
+      paymentUrl: `https://pay.spark.xyz/x402?fid=${userFid}`,
+      sparkCredits: '⚡ 10 free sparks remaining'
     };
   }
 }
